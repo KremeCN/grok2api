@@ -2,7 +2,7 @@
 
 这个仓库已经新增 **Cloudflare Workers / Pages** 可部署版本（TypeScript）。
 
-> 一键部署前置条件：若使用 GitHub Actions 工作流，请先在仓库 Secrets 配置 `CLOUDFLARE_API_TOKEN` 与 `CLOUDFLARE_ACCOUNT_ID`。  
+> 一键部署前置条件：若使用 GitHub Actions 工作流，请先在仓库 Secrets 配置 `CLOUDFLARE_API_TOKEN` 与 `CLOUDFLARE_ACCOUNT_ID`（可选再配 `IP_ALLOWLIST`）。  
 > Docker 一键启动入口仍是 `docker compose up -d`，请参考 `readme.md`。
 
 ## 功能概览
@@ -110,7 +110,7 @@ npx wrangler kv namespace create grok2api-cache
 - `KV_CLEANUP_BATCH = "200"`：清理批量（删除 KV key + D1 元数据）
 - `IP_ALLOWLIST`（可选）：逗号或空白分隔的客户端 IP 白名单，例如 `203.0.113.10,198.51.100.7`。
   - 留空/不配置：不限制来源 IP
-  - 配置后：仅白名单 IP 可访问接口路径（`/v1/*` 与 `/api/*`），WebUI 页面资源（如 `/login`、`/admin/*`、`/static/*`）不受限
+  - 配置后：仅白名单 IP 可访问整个 Worker（含 API 与 WebUI）
 
 ---
 
@@ -170,6 +170,7 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml config
 
 - `CLOUDFLARE_API_TOKEN`
 - `CLOUDFLARE_ACCOUNT_ID`（必填）
+- `IP_ALLOWLIST`（可选，建议放固定出口 IP；支持逗号分隔多个）
 
 > 提示：`CLOUDFLARE_API_TOKEN` 建议使用 **API Token**（不要用 Global API Key），并确保至少包含 **Workers Scripts / D1 / Workers KV Storage** 的编辑权限；否则工作流可能无法自动创建/复用 D1/KV 或部署 Worker。
 
@@ -282,6 +283,4 @@ region = "aws:us-east-1"
 ```bash
 python scripts/smoke_test.py --base-url https://<你的域名或workers.dev>
 ```
-
-
 

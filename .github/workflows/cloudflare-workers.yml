@@ -65,6 +65,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          IP_ALLOWLIST: ${{ secrets.IP_ALLOWLIST }}
         run: |
           python -u - <<'PY'
           import json
@@ -75,6 +76,7 @@ jobs:
           token = os.environ.get("CLOUDFLARE_API_TOKEN", "")
           account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "")
           build_sha = os.environ.get("GITHUB_SHA", "") or ""
+          ip_allowlist = os.environ.get("IP_ALLOWLIST", "").strip().replace("\"", "\\\"")
           if not token or not account_id:
               raise SystemExit("Missing CLOUDFLARE_API_TOKEN or CLOUDFLARE_ACCOUNT_ID")
 
@@ -181,6 +183,12 @@ jobs:
               else:
                   # Ensure we expose build info for debugging (e.g. /health).
                   text2 = re.sub(r'(?m)^\[vars\]\s*$', f'[vars]\nBUILD_SHA = "{build_sha}"', text2, count=1)
+          if ip_allowlist:
+              if re.search(r'(?m)^IP_ALLOWLIST\s*=', text2):
+                  text2 = re.sub(r'(?m)^IP_ALLOWLIST\s*=\s*"[^"]*"\s*$', f'IP_ALLOWLIST = "{ip_allowlist}"', text2)
+              else:
+                  text2 = re.sub(r'(?m)^\[vars\]\s*$', f'[vars]\nIP_ALLOWLIST = "{ip_allowlist}"', text2, count=1)
+
           open(dst_path, "w", encoding="utf-8").write(text2)
           print(f"KV namespace ready: {kv_title} ({kv_id})")
           print(f"D1 database ready: {d1_name} ({d1_id})")

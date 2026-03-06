@@ -113,11 +113,6 @@ app.onError((err, c) => {
 });
 
 app.use("*", async (c, next) => {
-  const pathname = new URL(c.req.url).pathname;
-  const protectedPath =
-    pathname === "/v1" || pathname.startsWith("/v1/") || pathname.startsWith("/api/");
-  if (!protectedPath) return next();
-
   const allowlist = parseIpAllowlist(c.env.IP_ALLOWLIST);
   if (allowlist.size === 0) return next();
 
