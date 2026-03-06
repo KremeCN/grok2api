@@ -84,7 +84,13 @@ async function fetchAsset(c: any, pathname: string): Promise<Response> {
   const url = new URL(c.req.url);
   url.pathname = pathname;
   try {
-    const res = await assets.fetch(new Request(url.toString(), c.req.raw));
+    const res = await assets.fetch(
+      new Request(url.toString(), {
+        method: c.req.raw.method,
+        headers: c.req.raw.headers,
+        redirect: "follow",
+      }),
+    );
     const extra: Record<string, string> = { "x-grok2api-build": buildSha };
 
     // Avoid caching UI files aggressively, otherwise users may keep seeing old UI after redeploy.
@@ -231,7 +237,13 @@ app.notFound(async (c) => {
   // Avoid calling c.notFound() here because it will invoke this handler again.
   if (!assets) return withResponseHeaders(c.text("Not Found", 404), { "x-grok2api-build": buildSha });
   try {
-    const res = await assets.fetch(c.req.raw);
+    const res = await assets.fetch(
+      new Request(c.req.url, {
+        method: c.req.raw.method,
+        headers: c.req.raw.headers,
+        redirect: "follow",
+      }),
+    );
     // Keep the header consistent for debugging/version checks.
     return withResponseHeaders(res, { "x-grok2api-build": buildSha });
   } catch (err) {
@@ -249,4 +261,5 @@ const handler: ExportedHandler<Env> = {
 };
 
 export default handler;
+
 
