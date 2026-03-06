@@ -15,4 +15,7 @@ export interface Env {
 
   // Batch size for daily cleanup
   KV_CLEANUP_BATCH?: string;
+
+  // Optional comma-separated client IP allowlist (e.g. "1.2.3.4,203.0.113.8")
+  IP_ALLOWLIST?: string;
 }

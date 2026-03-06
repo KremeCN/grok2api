@@ -18,6 +18,37 @@ function getBuildSha(env: Env): string {
   return v || "dev";
 }
 
+function getClientIp(req: Request): string {
+  return (
+    req.headers.get("CF-Connecting-IP")?.trim() ||
+    req.headers.get("X-Forwarded-For")?.split(",")[0]?.trim() ||
+    ""
+  );
+}
+
+function parseIpAllowlist(raw: string | undefined): Set<string> {
+  const list = String(raw ?? "")
+    .split(/[\s,]+/)
+    .map((ip) => ip.trim())
+    .filter(Boolean);
+  return new Set(list);
+}
+
+function ipAllowlistError(c: any): Response {
+  const buildSha = getBuildSha(c.env as Env);
+  const res = c.json(
+    {
+      error: {
+        message: "Access denied: client IP is not in allowlist",
+        type: "forbidden_error",
+        code: "ip_not_allowed",
+      },
+    },
+    403,
+  );
+  return withResponseHeaders(res, { "x-grok2api-build": buildSha });
+}
+
 function isDebugRequest(c: any): boolean {
   try {
     return new URL(c.req.url).searchParams.get("debug") === "1";
@@ -79,6 +110,20 @@ app.onError((err, c) => {
   const detail = isDebugRequest(c) ? `\n\n${err instanceof Error ? err.stack || err.message : String(err)}` : "";
   const res = c.text(`Internal Server Error${detail}`, 500);
   return withResponseHeaders(res, { "x-grok2api-build": buildSha });
+});
+
+app.use("*", async (c, next) => {
+  const pathname = new URL(c.req.url).pathname;
+  const protectedPath =
+    pathname === "/v1" || pathname.startsWith("/v1/") || pathname.startsWith("/api/");
+  if (!protectedPath) return next();
+
+  const allowlist = parseIpAllowlist(c.env.IP_ALLOWLIST);
+  if (allowlist.size === 0) return next();
+
+  const ip = getClientIp(c.req.raw);
+  if (ip && allowlist.has(ip)) return next();
+  return ipAllowlistError(c);
 });
 
 app.route("/v1", openAiRoutes);
@@ -209,3 +254,4 @@ const handler: ExportedHandler<Env> = {
 };
 
 export default handler;
+

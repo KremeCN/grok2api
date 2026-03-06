@@ -108,6 +108,9 @@ npx wrangler kv namespace create grok2api-cache
 - `crons = ["0 16 * * *"]`：每天 16:00 UTC（= 北京时间 00:00）触发清理
 - `KV_CACHE_MAX_BYTES = "26214400"`：最大缓存对象大小（KV 单值有大小限制，建议 ≤ 25MB）
 - `KV_CLEANUP_BATCH = "200"`：清理批量（删除 KV key + D1 元数据）
+- `IP_ALLOWLIST`（可选）：逗号或空白分隔的客户端 IP 白名单，例如 `203.0.113.10,198.51.100.7`。
+  - 留空/不配置：不限制来源 IP
+  - 配置后：仅白名单 IP 可访问接口路径（`/v1/*` 与 `/api/*`），WebUI 页面资源（如 `/login`、`/admin/*`、`/static/*`）不受限
 
 ---
 
@@ -279,3 +282,6 @@ region = "aws:us-east-1"
 ```bash
 python scripts/smoke_test.py --base-url https://<你的域名或workers.dev>
 ```
+
+
+
