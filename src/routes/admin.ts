@@ -36,6 +36,7 @@ import {
 } from "../repo/tokens";
 import { generateImagineWs, resolveAspectRatio } from "../grok/imagineExperimental";
 import { checkRateLimits } from "../grok/rateLimits";
+import { applyAccountSettingsForToken, normalizeRefreshToken } from "../grok/accountSettingsRefresh";
 import { addRequestLog, clearRequestLogs, getRequestLogs, getRequestStats } from "../repo/logs";
 import { getRefreshProgress, setRefreshProgress } from "../repo/refreshProgress";
 import {
@@ -74,6 +75,33 @@ function formatBytes(sizeBytes: number): string {
 function normalizeSsoToken(raw: string): string {
   const t = (raw || "").trim();
   return t.startsWith("sso=") ? t.slice(4).trim() : t;
+}
+
+const DEFAULT_NSFW_REFRESH_CONCURRENCY = 10;
+const DEFAULT_NSFW_REFRESH_RETRIES = 3;
+
+function toIntInRange(value: unknown, fallback: number, min: number, max: number): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(n)));
+}
+
+async function runWithConcurrency<T>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
+  if (!items.length) return;
+  const workerCount = Math.max(1, Math.min(Math.floor(concurrency || 1), items.length));
+  let cursor = 0;
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (true) {
+      const idx = cursor++;
+      if (idx >= items.length) break;
+      await fn(items[idx] as T);
+    }
+  });
+  await Promise.all(workers);
 }
 
 async function clearKvCacheByType(
@@ -758,6 +786,108 @@ adminRoutes.post("/api/v1/admin/tokens/refresh", requireAdminAuth, async (c) => 
     return c.json(legacyOk({ results }));
   } catch (e) {
     return c.json(legacyErr(`Refresh failed: ${e instanceof Error ? e.message : String(e)}`), 500);
+  }
+});
+
+
+adminRoutes.post("/api/v1/admin/tokens/nsfw/refresh", requireAdminAuth, async (c) => {
+  try {
+    let body: any = {};
+    try {
+      body = (await c.req.json()) as any;
+    } catch {
+      body = {};
+    }
+
+    const rawCandidates: string[] = [];
+    if (body && typeof body === "object" && Boolean(body.all)) {
+      const rows = await listTokens(c.env.DB);
+      for (const row of rows) rawCandidates.push(String(row.token ?? ""));
+    } else if (body && typeof body === "object") {
+      if (typeof body.token === "string") rawCandidates.push(body.token);
+      if (Array.isArray(body.tokens)) {
+        rawCandidates.push(...body.tokens.filter((x: unknown): x is string => typeof x === "string"));
+      }
+    }
+
+    const deduped: Array<{ raw: string; normalized: string }> = [];
+    const seen = new Set<string>();
+    for (const raw of rawCandidates) {
+      const normalized = normalizeRefreshToken(String(raw || "").trim());
+      if (!normalized || seen.has(normalized)) continue;
+      seen.add(normalized);
+      deduped.push({ raw: String(raw || "").trim(), normalized });
+    }
+
+    if (!deduped.length) return c.json(legacyErr("No tokens provided"), 400);
+
+    const concurrency = toIntInRange(
+      body?.concurrency,
+      DEFAULT_NSFW_REFRESH_CONCURRENCY,
+      1,
+      30,
+    );
+    const retries = toIntInRange(body?.retries, DEFAULT_NSFW_REFRESH_RETRIES, 0, 10);
+
+    const settings = await getSettings(c.env);
+    const failed: Array<Record<string, unknown>> = [];
+    let success = 0;
+    let invalidated = 0;
+
+    await runWithConcurrency(deduped, concurrency, async (item) => {
+      const maxAttempts = retries + 1;
+      let lastStep = "unknown";
+      let lastError = "unknown error";
+      let attempts = 0;
+
+      for (let i = 0; i < maxAttempts; i++) {
+        attempts = i + 1;
+        const result = await applyAccountSettingsForToken({
+          rawToken: item.raw,
+          settings: settings.grok,
+        });
+        if (result.ok) {
+          success += 1;
+          await dbRun(
+            c.env.DB,
+            "UPDATE tokens SET status = 'active', failed_count = 0, cooldown_until = NULL, last_failure_time = NULL, last_failure_reason = NULL WHERE token = ?",
+            [item.normalized],
+          );
+          return;
+        }
+        lastStep = result.step;
+        lastError = String(result.error || "unknown error");
+      }
+
+      invalidated += 1;
+      const reason = `account_settings_refresh_failed step=${lastStep} attempts=${attempts} error=${lastError}`.slice(0, 500);
+      await dbRun(
+        c.env.DB,
+        "UPDATE tokens SET status = 'expired', failed_count = 3, cooldown_until = NULL, last_failure_time = ?, last_failure_reason = ? WHERE token = ?",
+        [nowMs(), reason, item.normalized],
+      );
+      failed.push({
+        token: `sso=${item.normalized}`,
+        step: lastStep,
+        attempts,
+        error: lastError,
+        invalidated: true,
+      });
+    });
+
+    return c.json(
+      legacyOk({
+        summary: {
+          total: deduped.length,
+          success,
+          failed: failed.length,
+          invalidated,
+        },
+        failed,
+      }),
+    );
+  } catch (e) {
+    return c.json(legacyErr(`NSFW refresh failed: ${e instanceof Error ? e.message : String(e)}`), 500);
   }
 });
 
@@ -1554,3 +1684,4 @@ adminRoutes.post("/api/logs/add", requireAdminAuth, async (c) => {
     return c.json(jsonError(`写入失败: ${e instanceof Error ? e.message : String(e)}`, "LOG_ADD_ERROR"), 500);
   }
 });
+

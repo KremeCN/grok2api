@@ -218,13 +218,12 @@ async function detectWorkersRuntime() {
 }
 
 async function applyRuntimeUiFlags() {
-  // Default hide first; show back for local/docker after detection.
+  // Auto-register is still hidden on Workers; NSFW refresh is now supported on both runtimes.
   setAutoRegisterUiEnabled(false);
-  setNsfwRefreshUiEnabled(false);
+  setNsfwRefreshUiEnabled(true);
   isWorkersRuntime = await detectWorkersRuntime();
   if (!isWorkersRuntime) {
     setAutoRegisterUiEnabled(true);
-    setNsfwRefreshUiEnabled(true);
   }
 }
 
@@ -1453,3 +1452,4 @@ function escapeHtml(text) {
 
 
 window.onload = init;
+
