@@ -90,6 +90,7 @@ async function postGrpc(args: {
   new Uint8Array(bodyBuffer).set(args.body);
   const resp = await fetch(args.url, {
     method: "POST",
+    redirect: "manual",
     headers: {
       "content-type": "application/grpc-web+proto",
       origin: args.origin,
@@ -103,9 +104,11 @@ async function postGrpc(args: {
 
   const grpcStatus = String(resp.headers.get("grpc-status") || "").trim();
   if (resp.status !== 200) {
+    const location = String(resp.headers.get("location") || "").trim();
     const text = (await resp.text().catch(() => "")).slice(0, 200);
+    const redirectHint = location ? ` location=${location}` : "";
     const suffix = text ? ` ${text}` : "";
-    return { ok: false, error: `HTTP ${resp.status}${suffix}`.trim() };
+    return { ok: false, error: `HTTP ${resp.status}${redirectHint}${suffix}`.trim() };
   }
   if (grpcStatus && grpcStatus !== "0") return { ok: false, error: `gRPC ${grpcStatus}` };
   return { ok: true };
@@ -116,6 +119,7 @@ async function setBirthDate(args: {
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   const resp = await fetch("https://grok.com/rest/auth/set-birth-date", {
     method: "POST",
+    redirect: "manual",
     headers: {
       "content-type": "application/json",
       origin: "https://grok.com",
@@ -127,9 +131,11 @@ async function setBirthDate(args: {
   });
 
   if (resp.status === 200) return { ok: true };
+  const location = String(resp.headers.get("location") || "").trim();
   const text = (await resp.text().catch(() => "")).slice(0, 200);
+  const redirectHint = location ? ` location=${location}` : "";
   const suffix = text ? ` ${text}` : "";
-  return { ok: false, error: `HTTP ${resp.status}${suffix}`.trim() };
+  return { ok: false, error: `HTTP ${resp.status}${redirectHint}${suffix}`.trim() };
 }
 
 export async function applyAccountSettingsForToken(args: {

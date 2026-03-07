@@ -77,8 +77,8 @@ function normalizeSsoToken(raw: string): string {
   return t.startsWith("sso=") ? t.slice(4).trim() : t;
 }
 
-const DEFAULT_NSFW_REFRESH_CONCURRENCY = 10;
-const DEFAULT_NSFW_REFRESH_RETRIES = 3;
+const DEFAULT_NSFW_REFRESH_CONCURRENCY = 1;
+const DEFAULT_NSFW_REFRESH_RETRIES = 0;
 
 function toIntInRange(value: unknown, fallback: number, min: number, max: number): number {
   const n = Number(value);
@@ -825,14 +825,12 @@ adminRoutes.post("/api/v1/admin/tokens/nsfw/refresh", requireAdminAuth, async (c
       body?.concurrency,
       DEFAULT_NSFW_REFRESH_CONCURRENCY,
       1,
-      30,
-    );
-    const retries = toIntInRange(body?.retries, DEFAULT_NSFW_REFRESH_RETRIES, 0, 10);
-
-    const maxTokensPerInvocation = Math.max(
       1,
-      Math.floor(40 / (3 * (retries + 1) + 1)),
     );
+    const retries = toIntInRange(body?.retries, DEFAULT_NSFW_REFRESH_RETRIES, 0, 1);
+
+    // Keep each invocation very small to avoid Cloudflare subrequest quota hits.
+    const maxTokensPerInvocation = 1;
     const targets = deduped.slice(0, maxTokensPerInvocation);
     const remaining = Math.max(0, deduped.length - targets.length);
 

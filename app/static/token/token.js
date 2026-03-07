@@ -1168,9 +1168,9 @@ async function refreshAllNsfw() {
     btn.innerHTML = "刷新中...";
   }
 
-  const CHUNK_SIZE = 4;
+  const CHUNK_SIZE = 1;
   const RETRIES = 0;
-  const CONCURRENCY = 2;
+  const CONCURRENCY = 1;
 
   try {
     const listRes = await fetch("/api/v1/admin/tokens", {
@@ -1236,11 +1236,15 @@ async function refreshAllNsfw() {
       success += Number(summary.success || 0);
       failed += Number(summary.failed || 0);
       invalidated += Number(summary.invalidated || 0);
+
+      if (i + CHUNK_SIZE < deduped.length) {
+        await new Promise((resolve) => setTimeout(resolve, 120));
+      }
     }
 
     showToast(
-      `NSFW 刷新完成：总计 ${total}，成功 ${success}，失败 ${failed}，失效 ${invalidated}`
-      , failed > 0 ? "info" : "success"
+      `NSFW 刷新完成：总计 ${total}，成功 ${success}，失败 ${failed}，失效 ${invalidated}`,
+      failed > 0 ? "info" : "success"
     );
     loadData();
   } catch (e) {
