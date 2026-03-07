@@ -1150,57 +1150,106 @@ async function refreshStatus(token, btnEl) {
 
 async function refreshAllNsfw() {
   if (isNsfwRefreshAllRunning) {
-    showToast('NSFW 刷新任务进行中', 'info');
+    showToast("NSFW 刷新任务进行中", "info");
     return;
   }
 
   const ok = await confirmAction(
-    '将对全部 Token 执行：同意用户协议 + 设置年龄 + 开启 NSFW。未成功的 Token 会自动标记为失效，是否继续？',
-    { okText: '开始刷新' }
+    "将对全部 Token 执行：同意用户协议 + 设置年龄 + 开启 NSFW。未成功的 Token 会自动标记为失效，是否继续？",
+    { okText: "开始刷新" }
   );
   if (!ok) return;
 
-  const btn = document.getElementById('btn-refresh-nsfw-all');
-  const originalText = btn ? btn.innerHTML : '';
+  const btn = document.getElementById("btn-refresh-nsfw-all");
+  const originalText = btn ? btn.innerHTML : "";
   isNsfwRefreshAllRunning = true;
   if (btn) {
     btn.disabled = true;
-    btn.innerHTML = '刷新中...';
+    btn.innerHTML = "刷新中...";
   }
 
-  try {
-    const res = await fetch('/api/v1/admin/tokens/nsfw/refresh', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...buildAuthHeaders(apiKey)
-      },
-      body: JSON.stringify({ all: true })
-    });
+  const CHUNK_SIZE = 4;
+  const RETRIES = 0;
+  const CONCURRENCY = 2;
 
-    const payload = await parseJsonSafely(res);
-    if (!res.ok) {
-      showToast(extractApiErrorMessage(payload, 'NSFW 刷新失败'), 'error');
+  try {
+    const listRes = await fetch("/api/v1/admin/tokens", {
+      headers: buildAuthHeaders(apiKey),
+    });
+    const tokenPayload = await parseJsonSafely(listRes);
+    if (!listRes.ok) {
+      showToast(extractApiErrorMessage(tokenPayload, "读取 Token 列表失败"), "error");
       return;
     }
 
-    const summary = payload?.summary || {};
-    const total = Number(summary.total || 0);
-    const success = Number(summary.success || 0);
-    const failed = Number(summary.failed || 0);
-    const invalidated = Number(summary.invalidated || 0);
+    const allTokens = [];
+    for (const pool of ["ssoBasic", "ssoSuper"]) {
+      const items = Array.isArray(tokenPayload?.[pool]) ? tokenPayload[pool] : [];
+      for (const item of items) {
+        const token = typeof item === "string" ? item : item?.token;
+        if (typeof token === "string" && token.trim()) allTokens.push(token.trim());
+      }
+    }
+
+    const deduped = Array.from(new Set(allTokens));
+    if (!deduped.length) {
+      showToast("没有可刷新的 Token", "info");
+      return;
+    }
+
+    const totalChunks = Math.ceil(deduped.length / CHUNK_SIZE);
+    let total = 0;
+    let success = 0;
+    let failed = 0;
+    let invalidated = 0;
+
+    for (let i = 0; i < deduped.length; i += CHUNK_SIZE) {
+      const chunkIndex = Math.floor(i / CHUNK_SIZE) + 1;
+      const chunk = deduped.slice(i, i + CHUNK_SIZE);
+      if (btn) btn.innerHTML = `刷新中... (${chunkIndex}/${totalChunks})`;
+
+      const res = await fetch("/api/v1/admin/tokens/nsfw/refresh", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...buildAuthHeaders(apiKey),
+        },
+        body: JSON.stringify({
+          tokens: chunk,
+          retries: RETRIES,
+          concurrency: CONCURRENCY,
+        }),
+      });
+
+      const payload = await parseJsonSafely(res);
+      if (!res.ok) {
+        const msg = extractApiErrorMessage(payload, "NSFW 分片刷新失败");
+        showToast(`第 ${chunkIndex}/${totalChunks} 片失败：${msg}`, "error");
+        total += chunk.length;
+        failed += chunk.length;
+        invalidated += chunk.length;
+        continue;
+      }
+
+      const summary = payload?.summary || {};
+      total += Number(summary.total || chunk.length);
+      success += Number(summary.success || 0);
+      failed += Number(summary.failed || 0);
+      invalidated += Number(summary.invalidated || 0);
+    }
+
     showToast(
-      `NSFW 刷新完成：总计 ${total}，成功 ${success}，失败 ${failed}，失效 ${invalidated}`,
-      failed > 0 ? 'info' : 'success'
+      `NSFW 刷新完成：总计 ${total}，成功 ${success}，失败 ${failed}，失效 ${invalidated}`
+      , failed > 0 ? "info" : "success"
     );
     loadData();
   } catch (e) {
-    showToast(e?.message ? `NSFW 刷新失败: ${e.message}` : 'NSFW 刷新失败', 'error');
+    showToast(e?.message ? `NSFW 刷新失败: ${e.message}` : "NSFW 刷新失败", "error");
   } finally {
     isNsfwRefreshAllRunning = false;
     if (btn) {
       btn.disabled = false;
-      btn.innerHTML = originalText || '一键刷新 NSFW';
+      btn.innerHTML = originalText || "一键刷新 NSFW";
     }
   }
 }

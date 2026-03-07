@@ -829,12 +829,19 @@ adminRoutes.post("/api/v1/admin/tokens/nsfw/refresh", requireAdminAuth, async (c
     );
     const retries = toIntInRange(body?.retries, DEFAULT_NSFW_REFRESH_RETRIES, 0, 10);
 
+    const maxTokensPerInvocation = Math.max(
+      1,
+      Math.floor(40 / (3 * (retries + 1) + 1)),
+    );
+    const targets = deduped.slice(0, maxTokensPerInvocation);
+    const remaining = Math.max(0, deduped.length - targets.length);
+
     const settings = await getSettings(c.env);
     const failed: Array<Record<string, unknown>> = [];
     let success = 0;
     let invalidated = 0;
 
-    await runWithConcurrency(deduped, concurrency, async (item) => {
+    await runWithConcurrency(targets, concurrency, async (item) => {
       const maxAttempts = retries + 1;
       let lastStep = "unknown";
       let lastError = "unknown error";
@@ -878,12 +885,14 @@ adminRoutes.post("/api/v1/admin/tokens/nsfw/refresh", requireAdminAuth, async (c
     return c.json(
       legacyOk({
         summary: {
-          total: deduped.length,
+          total: targets.length,
           success,
           failed: failed.length,
           invalidated,
         },
         failed,
+        has_more: remaining > 0,
+        remaining,
       }),
     );
   } catch (e) {
