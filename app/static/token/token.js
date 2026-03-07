@@ -1168,9 +1168,66 @@ async function refreshAllNsfw() {
     btn.innerHTML = "刷新中...";
   }
 
-  const TOKEN_DELAY_MS = 120;
-  const STEP_DELAY_MS = 80;
+  const TOKEN_WORKERS = 3;
+  const STEP_DELAY_MS = 60;
+  const BATCH_DELAY_MS = 120;
   const STEP_ORDER = ["tos", "birth", "nsfw"];
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  async function refreshOneToken(token, tokenIndex, totalCount) {
+    let tokenOk = true;
+    let tokenErr = "";
+
+    for (let s = 0; s < STEP_ORDER.length; s += 1) {
+      const step = STEP_ORDER[s];
+      const res = await fetch("/api/v1/admin/tokens/nsfw/refresh", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...buildAuthHeaders(apiKey),
+        },
+        body: JSON.stringify({
+          token,
+          step,
+          retries: 0,
+          concurrency: 1,
+          persist_status: false,
+        }),
+      });
+
+      const payload = await parseJsonSafely(res);
+      const diagnostics = payload?.diagnostics || null;
+      if (!res.ok) {
+        tokenOk = false;
+        const baseErr = extractApiErrorMessage(payload, `步骤 ${step} 失败`);
+        const stage = diagnostics?.stage ? ` stage=${diagnostics.stage}` : "";
+        tokenErr = `${baseErr}${stage}`;
+        if (diagnostics) console.error("NSFW refresh diagnostics", diagnostics, payload);
+        break;
+      }
+
+      const summary = payload?.summary || {};
+      if (Number(summary.success || 0) < 1) {
+        const firstFail = Array.isArray(payload?.failed) ? payload.failed[0] : null;
+        tokenOk = false;
+        const stage = diagnostics?.stage ? ` stage=${diagnostics.stage}` : "";
+        tokenErr = `${firstFail?.error || firstFail?.step || `步骤 ${step} 失败`}${stage}`;
+        if (diagnostics) console.error("NSFW refresh diagnostics", diagnostics, payload);
+        break;
+      }
+
+      if (s + 1 < STEP_ORDER.length) {
+        await sleep(STEP_DELAY_MS);
+      }
+    }
+
+    return {
+      tokenIndex,
+      totalCount,
+      ok: tokenOk,
+      error: tokenErr,
+    };
+  }
 
   try {
     const listRes = await fetch("/api/v1/admin/tokens", {
@@ -1197,79 +1254,35 @@ async function refreshAllNsfw() {
       return;
     }
 
-    let total = 0;
+    let completed = 0;
     let success = 0;
     let failed = 0;
 
-    for (let i = 0; i < deduped.length; i += 1) {
-      const token = deduped[i];
-      const tokenIndex = i + 1;
-      if (btn) btn.innerHTML = `刷新中... (${tokenIndex}/${deduped.length})`;
+    for (let i = 0; i < deduped.length; i += TOKEN_WORKERS) {
+      const batch = deduped.slice(i, i + TOKEN_WORKERS);
+      const results = await Promise.all(
+        batch.map((token, idx) => refreshOneToken(token, i + idx + 1, deduped.length))
+      );
 
-      let tokenOk = true;
-      let tokenErr = "";
+      for (const result of results) {
+        completed += 1;
+        if (btn) btn.innerHTML = `刷新中... (${completed}/${deduped.length})`;
 
-      for (let s = 0; s < STEP_ORDER.length; s += 1) {
-        const step = STEP_ORDER[s];
-        const res = await fetch("/api/v1/admin/tokens/nsfw/refresh", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...buildAuthHeaders(apiKey),
-          },
-          body: JSON.stringify({
-            token,
-            step,
-            retries: 0,
-            concurrency: 1,
-            persist_status: false,
-          }),
-        });
-
-        const payload = await parseJsonSafely(res);
-        const diagnostics = payload?.diagnostics || null;
-        if (!res.ok) {
-          tokenOk = false;
-          const baseErr = extractApiErrorMessage(payload, `步骤 ${step} 失败`);
-          const stage = diagnostics?.stage ? ` stage=${diagnostics.stage}` : "";
-          tokenErr = `${baseErr}${stage}`;
-          if (diagnostics) console.error("NSFW refresh diagnostics", diagnostics, payload);
-          break;
-        }
-
-        const summary = payload?.summary || {};
-        if (Number(summary.success || 0) < 1) {
-          const firstFail = Array.isArray(payload?.failed) ? payload.failed[0] : null;
-          tokenOk = false;
-          const stage = diagnostics?.stage ? ` stage=${diagnostics.stage}` : "";
-          tokenErr = `${firstFail?.error || firstFail?.step || `步骤 ${step} 失败`}${stage}`;
-          if (diagnostics) console.error("NSFW refresh diagnostics", diagnostics, payload);
-          break;
-        }
-
-        if (s + 1 < STEP_ORDER.length) {
-          await new Promise((resolve) => setTimeout(resolve, STEP_DELAY_MS));
+        if (result.ok) {
+          success += 1;
+        } else {
+          failed += 1;
+          showToast(`第 ${result.tokenIndex}/${result.totalCount} 个 Token 失败：${result.error}`, "error");
         }
       }
 
-      total += 1;
-      if (tokenOk) {
-        success += 1;
-      } else {
-        failed += 1;
-      }
-
-      if (!tokenOk) {
-        showToast(`第 ${tokenIndex}/${deduped.length} 个 Token 失败：${tokenErr}`, "error");
-      }
-
-      if (tokenIndex < deduped.length) {
-        await new Promise((resolve) => setTimeout(resolve, TOKEN_DELAY_MS));
+      if (i + TOKEN_WORKERS < deduped.length) {
+        await sleep(BATCH_DELAY_MS);
       }
     }
 
     showToast(
-      `NSFW 刷新完成：总计 ${total}，成功 ${success}，失败 ${failed}`,
+      `NSFW 刷新完成：总计 ${deduped.length}，成功 ${success}，失败 ${failed}`,
       failed > 0 ? "info" : "success"
     );
     loadData();
