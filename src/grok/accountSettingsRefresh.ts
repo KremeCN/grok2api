@@ -144,6 +144,7 @@ export async function applyAccountSettingsForToken(args: {
   rawToken: string;
   settings: GrokSettings;
   steps?: AccountSettingsStep[];
+  onStep?: (step: AccountSettingsStep) => void;
 }): Promise<AccountSettingsApplyResult> {
   const { sso, ssoRw } = parseSsoPair(args.rawToken);
   if (!sso) return { ok: false, step: "parse", error: "missing sso" };
@@ -156,6 +157,8 @@ export async function applyAccountSettingsForToken(args: {
     : (["tos", "birth", "nsfw"] as AccountSettingsStep[]);
 
   for (const step of requestedSteps) {
+    args.onStep?.(step);
+
     if (step === "tos") {
       const tos = await postGrpc({
         url: "https://accounts.x.ai/auth_mgmt.AuthManagement/SetTosAcceptedVersion",

@@ -804,7 +804,17 @@ adminRoutes.post("/api/v1/admin/tokens/refresh", requireAdminAuth, async (c) => 
 
 
 adminRoutes.post("/api/v1/admin/tokens/nsfw/refresh", requireAdminAuth, async (c) => {
+  const diagnostics: Record<string, unknown> = {
+    build_sha: String((c.env as any).BUILD_SHA ?? ""),
+    cf_ray: String(c.req.header("cf-ray") ?? c.req.header("CF-Ray") ?? ""),
+    stage: "init",
+    steps: [],
+    persist_status: false,
+    token_count: 0,
+  };
+
   try {
+    diagnostics.stage = "parse_body";
     let body: any = {};
     try {
       body = (await c.req.json()) as any;
@@ -812,6 +822,7 @@ adminRoutes.post("/api/v1/admin/tokens/nsfw/refresh", requireAdminAuth, async (c
       body = {};
     }
 
+    diagnostics.stage = "collect_tokens";
     const rawCandidates: string[] = [];
     if (body && typeof body === "object" && Boolean(body.all)) {
       const rows = await listTokens(c.env.DB);
@@ -832,9 +843,14 @@ adminRoutes.post("/api/v1/admin/tokens/nsfw/refresh", requireAdminAuth, async (c
       deduped.push({ raw: String(raw || "").trim(), normalized });
     }
 
-    if (!deduped.length) return c.json(legacyErr("No tokens provided"), 400);
+    diagnostics.token_count = deduped.length;
+    if (!deduped.length) {
+      diagnostics.stage = "no_tokens";
+      return c.json({ ...legacyErr("No tokens provided"), diagnostics }, 400);
+    }
 
     const steps = parseNsfwSteps(body?.steps ?? body?.step);
+    diagnostics.steps = steps;
     const concurrency = toIntInRange(
       body?.concurrency,
       DEFAULT_NSFW_REFRESH_CONCURRENCY,
@@ -849,6 +865,8 @@ adminRoutes.post("/api/v1/admin/tokens/nsfw/refresh", requireAdminAuth, async (c
     const remaining = Math.max(0, deduped.length - targets.length);
 
     const persistStatus = body?.persist_status === true;
+    diagnostics.persist_status = persistStatus;
+
     const cfClearance = typeof body?.cf_clearance === "string" ? body.cf_clearance : "";
     const minimalSettings = { cf_clearance: cfClearance } as any;
 
@@ -856,6 +874,7 @@ adminRoutes.post("/api/v1/admin/tokens/nsfw/refresh", requireAdminAuth, async (c
     let success = 0;
     let invalidated = 0;
 
+    diagnostics.stage = "run";
     await runWithConcurrency(targets, concurrency, async (item) => {
       const maxAttempts = retries + 1;
       let lastStep = "unknown";
@@ -864,15 +883,22 @@ adminRoutes.post("/api/v1/admin/tokens/nsfw/refresh", requireAdminAuth, async (c
 
       for (let i = 0; i < maxAttempts; i++) {
         attempts = i + 1;
+        let currentStep = String(steps[0] ?? "unknown");
         try {
+          diagnostics.stage = `apply:${currentStep}`;
           const result = await applyAccountSettingsForToken({
             rawToken: item.raw,
             settings: minimalSettings,
             steps,
+            onStep: (step) => {
+              currentStep = step;
+              diagnostics.stage = `apply:${step}`;
+            },
           });
           if (result.ok) {
             success += 1;
             if (persistStatus) {
+              diagnostics.stage = "db_mark_active";
               await dbRun(
                 c.env.DB,
                 "UPDATE tokens SET status = 'active', failed_count = 0, cooldown_until = NULL, last_failure_time = NULL, last_failure_reason = NULL WHERE token = ?",
@@ -884,7 +910,7 @@ adminRoutes.post("/api/v1/admin/tokens/nsfw/refresh", requireAdminAuth, async (c
           lastStep = result.step;
           lastError = String(result.error || "unknown error");
         } catch (err) {
-          lastStep = String(steps[steps.length - 1] || "unknown");
+          lastStep = currentStep || String(steps[steps.length - 1] || "unknown");
           lastError = err instanceof Error ? err.message : String(err);
         }
       }
@@ -892,6 +918,7 @@ adminRoutes.post("/api/v1/admin/tokens/nsfw/refresh", requireAdminAuth, async (c
       if (persistStatus) {
         invalidated += 1;
         const reason = `account_settings_refresh_failed step=${lastStep} attempts=${attempts} error=${lastError}`.slice(0, 500);
+        diagnostics.stage = "db_mark_expired";
         await dbRun(
           c.env.DB,
           "UPDATE tokens SET status = 'expired', failed_count = 3, cooldown_until = NULL, last_failure_time = ?, last_failure_reason = ? WHERE token = ?",
@@ -908,6 +935,7 @@ adminRoutes.post("/api/v1/admin/tokens/nsfw/refresh", requireAdminAuth, async (c
       });
     });
 
+    diagnostics.stage = "done";
     return c.json(
       legacyOk({
         summary: {
@@ -920,13 +948,15 @@ adminRoutes.post("/api/v1/admin/tokens/nsfw/refresh", requireAdminAuth, async (c
           steps,
           persist_status: persistStatus,
         },
+        diagnostics,
         failed,
         has_more: remaining > 0,
         remaining,
       }),
     );
   } catch (e) {
-    return c.json(legacyErr(`NSFW refresh failed: ${e instanceof Error ? e.message : String(e)}`), 500);
+    const message = `NSFW refresh failed: ${e instanceof Error ? e.message : String(e)}`;
+    return c.json({ ...legacyErr(message), diagnostics }, 500);
   }
 });
 adminRoutes.get("/api/v1/admin/cache/local", requireAdminAuth, async (c) => {

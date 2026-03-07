@@ -55,7 +55,3 @@ KV_CLEANUP_BATCH = "200"
 # Every day at 00:00 (Asia/Shanghai => 16:00 UTC)
 crons = ["0 16 * * *"]
 
-[limits]
-# Avoid inherited low subrequest caps from dashboard config.
-subrequests = 50
-

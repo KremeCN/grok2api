@@ -1227,9 +1227,13 @@ async function refreshAllNsfw() {
         });
 
         const payload = await parseJsonSafely(res);
+        const diagnostics = payload?.diagnostics || null;
         if (!res.ok) {
           tokenOk = false;
-          tokenErr = extractApiErrorMessage(payload, `步骤 ${step} 失败`);
+          const baseErr = extractApiErrorMessage(payload, `步骤 ${step} 失败`);
+          const stage = diagnostics?.stage ? ` stage=${diagnostics.stage}` : "";
+          tokenErr = `${baseErr}${stage}`;
+          if (diagnostics) console.error("NSFW refresh diagnostics", diagnostics, payload);
           break;
         }
 
@@ -1237,7 +1241,9 @@ async function refreshAllNsfw() {
         if (Number(summary.success || 0) < 1) {
           const firstFail = Array.isArray(payload?.failed) ? payload.failed[0] : null;
           tokenOk = false;
-          tokenErr = firstFail?.error || firstFail?.step || `步骤 ${step} 失败`;
+          const stage = diagnostics?.stage ? ` stage=${diagnostics.stage}` : "";
+          tokenErr = `${firstFail?.error || firstFail?.step || `步骤 ${step} 失败`}${stage}`;
+          if (diagnostics) console.error("NSFW refresh diagnostics", diagnostics, payload);
           break;
         }
 

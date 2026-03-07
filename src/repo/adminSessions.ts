@@ -18,7 +18,6 @@ export async function deleteAdminSession(db: Env["DB"], token: string): Promise<
 
 export async function verifyAdminSession(db: Env["DB"], token: string): Promise<boolean> {
   const now = nowMs();
-  await dbRun(db, "DELETE FROM admin_sessions WHERE expires_at <= ?", [now]);
   const row = await dbFirst<{ token: string }>(
     db,
     "SELECT token FROM admin_sessions WHERE token = ? AND expires_at > ?",
