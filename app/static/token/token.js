@@ -67,6 +67,51 @@ async function parseJsonSafely(response) {
   }
 }
 
+const NSFW_REFRESH_WORKERS_KEY = 'nsfw_refresh_workers';
+const NSFW_REFRESH_DEFAULT_WORKERS = 3;
+const NSFW_REFRESH_MIN_WORKERS = 1;
+const NSFW_REFRESH_MAX_WORKERS = 12;
+
+function clampInt(value, fallback, min, max) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(n)));
+}
+
+function getNsfwRefreshWorkers() {
+  try {
+    const raw = localStorage.getItem(NSFW_REFRESH_WORKERS_KEY);
+    return clampInt(
+      raw,
+      NSFW_REFRESH_DEFAULT_WORKERS,
+      NSFW_REFRESH_MIN_WORKERS,
+      NSFW_REFRESH_MAX_WORKERS
+    );
+  } catch (e) {
+    return NSFW_REFRESH_DEFAULT_WORKERS;
+  }
+}
+
+function setNsfwRefreshWorkers(value) {
+  const workers = clampInt(
+    value,
+    NSFW_REFRESH_DEFAULT_WORKERS,
+    NSFW_REFRESH_MIN_WORKERS,
+    NSFW_REFRESH_MAX_WORKERS
+  );
+  try {
+    localStorage.setItem(NSFW_REFRESH_WORKERS_KEY, String(workers));
+  } catch (e) {
+    // ignore storage errors
+  }
+  return workers;
+}
+
+if (typeof window !== 'undefined') {
+  window.setNsfwRefreshWorkers = setNsfwRefreshWorkers;
+  window.getNsfwRefreshWorkers = getNsfwRefreshWorkers;
+}
+
 function normalizeTokenRecord(pool, raw) {
   const tokenType = poolToType(pool);
   const isString = typeof raw === 'string';
@@ -1168,7 +1213,7 @@ async function refreshAllNsfw() {
     btn.innerHTML = "刷新中...";
   }
 
-  const TOKEN_WORKERS = 3;
+  const TOKEN_WORKERS = getNsfwRefreshWorkers();
   const STEP_DELAY_MS = 60;
   const BATCH_DELAY_MS = 120;
   const STEP_ORDER = ["tos", "birth", "nsfw"];
@@ -1257,6 +1302,7 @@ async function refreshAllNsfw() {
     let completed = 0;
     let success = 0;
     let failed = 0;
+    let quotaLimited = false;
 
     for (let i = 0; i < deduped.length; i += TOKEN_WORKERS) {
       const batch = deduped.slice(i, i + TOKEN_WORKERS);
@@ -1272,13 +1318,26 @@ async function refreshAllNsfw() {
           success += 1;
         } else {
           failed += 1;
+          if (/Too\s+many\s+subrequests/i.test(String(result.error || ""))) {
+            quotaLimited = true;
+          }
           showToast(`第 ${result.tokenIndex}/${result.totalCount} 个 Token 失败：${result.error}`, "error");
         }
       }
 
+      if (quotaLimited) break;
+
       if (i + TOKEN_WORKERS < deduped.length) {
         await sleep(BATCH_DELAY_MS);
       }
+    }
+
+    if (quotaLimited) {
+      const suggestedWorkers = Math.max(NSFW_REFRESH_MIN_WORKERS, Math.floor(TOKEN_WORKERS / 2));
+      showToast(
+        `检测到 subrequest 限制，建议并发调到 ${suggestedWorkers}（控制台执行 setNsfwRefreshWorkers(${suggestedWorkers})）`,
+        "error"
+      );
     }
 
     showToast(
