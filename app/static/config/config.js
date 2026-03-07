@@ -15,6 +15,7 @@ const NUMERIC_FIELDS = new Set([
   'assets_delete_batch_size',
   'admin_assets_batch_size',
   'reload_interval_sec',
+  'nsfw_refresh_workers',
   'solver_threads',
   'register_threads',
   'default_count'
@@ -54,7 +55,8 @@ const LOCALE_MAP = {
     "nsfw_refresh_concurrency": { title: "NSFW 刷新并发", desc: "账户设置刷新（协议/年龄/NSFW）时的默认并发数。" },
     "nsfw_refresh_retries": { title: "NSFW 刷新重试", desc: "账户设置刷新失败后的额外重试次数（不含首次）。" },
     "save_delay_ms": { title: "保存延迟", desc: "Token 变更合并写入的延迟（毫秒）。" },
-    "reload_interval_sec": { title: "一致性刷新", desc: "多 worker 场景下 Token 状态刷新间隔（秒）。" }
+    "reload_interval_sec": { title: "一致性刷新", desc: "多 worker 场景下 Token 状态刷新间隔（秒）。" },
+    "nsfw_refresh_workers": { title: "NSFW 刷新并发上限", desc: "Workers 一键刷新 NSFW 的并发 Token 数，用于性能/稳定性平衡。" }
   },
   "cache": {
     "label": "缓存设置",
@@ -401,3 +403,4 @@ async function copyToClipboard(text, btn) {
 }
 
 window.onload = init;
+

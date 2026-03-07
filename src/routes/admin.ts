@@ -321,6 +321,7 @@ adminRoutes.get("/api/v1/admin/config", requireAdminAuth, async (c) => {
         fail_threshold: Number(settings.token.fail_threshold ?? 5),
         save_delay_ms: Number(settings.token.save_delay_ms ?? 500),
         reload_interval_sec: Number(settings.token.reload_interval_sec ?? 30),
+        nsfw_refresh_workers: Number(settings.token.nsfw_refresh_workers ?? 12),
       },
       cache: {
         enable_auto_clean: Boolean(settings.cache.enable_auto_clean),
@@ -397,6 +398,8 @@ adminRoutes.post("/api/v1/admin/config", requireAdminAuth, async (c) => {
         token_config.save_delay_ms = Math.max(0, Math.floor(Number(tokenCfg.save_delay_ms)));
       if (Number.isFinite(Number(tokenCfg.reload_interval_sec)))
         token_config.reload_interval_sec = Math.max(0, Math.floor(Number(tokenCfg.reload_interval_sec)));
+      if (Number.isFinite(Number(tokenCfg.nsfw_refresh_workers)))
+        token_config.nsfw_refresh_workers = Math.max(1, Math.min(20, Math.floor(Number(tokenCfg.nsfw_refresh_workers))));
     }
 
     if (cacheCfg && typeof cacheCfg === "object") {

@@ -68,9 +68,9 @@ async function parseJsonSafely(response) {
 }
 
 const NSFW_REFRESH_WORKERS_KEY = 'nsfw_refresh_workers';
-const NSFW_REFRESH_DEFAULT_WORKERS = 3;
+const NSFW_REFRESH_DEFAULT_WORKERS = 12;
 const NSFW_REFRESH_MIN_WORKERS = 1;
-const NSFW_REFRESH_MAX_WORKERS = 12;
+const NSFW_REFRESH_MAX_WORKERS = 20;
 
 function clampInt(value, fallback, min, max) {
   const n = Number(value);
@@ -103,6 +103,27 @@ function setNsfwRefreshWorkers(value) {
     localStorage.setItem(NSFW_REFRESH_WORKERS_KEY, String(workers));
   } catch (e) {
     // ignore storage errors
+  }
+  return workers;
+}
+async function resolveNsfwRefreshWorkers() {
+  let workers = getNsfwRefreshWorkers();
+  try {
+    const res = await fetch('/api/v1/admin/config', {
+      headers: buildAuthHeaders(apiKey)
+    });
+    const payload = await parseJsonSafely(res);
+    if (res.ok) {
+      workers = clampInt(
+        payload?.token?.nsfw_refresh_workers,
+        workers,
+        NSFW_REFRESH_MIN_WORKERS,
+        NSFW_REFRESH_MAX_WORKERS
+      );
+      setNsfwRefreshWorkers(workers);
+    }
+  } catch (e) {
+    // ignore network/config errors and keep local fallback
   }
   return workers;
 }
@@ -1213,7 +1234,7 @@ async function refreshAllNsfw() {
     btn.innerHTML = "刷新中...";
   }
 
-  const TOKEN_WORKERS = getNsfwRefreshWorkers();
+  const TOKEN_WORKERS = await resolveNsfwRefreshWorkers();
   const STEP_DELAY_MS = 60;
   const BATCH_DELAY_MS = 120;
   const STEP_ORDER = ["tos", "birth", "nsfw"];
