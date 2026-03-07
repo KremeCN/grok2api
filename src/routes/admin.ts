@@ -321,7 +321,7 @@ adminRoutes.get("/api/v1/admin/config", requireAdminAuth, async (c) => {
         fail_threshold: Number(settings.token.fail_threshold ?? 5),
         save_delay_ms: Number(settings.token.save_delay_ms ?? 500),
         reload_interval_sec: Number(settings.token.reload_interval_sec ?? 30),
-        nsfw_refresh_workers: Number(settings.token.nsfw_refresh_workers ?? 12),
+        nsfw_refresh_workers: Number(settings.token.nsfw_refresh_workers ?? 10),
       },
       cache: {
         enable_auto_clean: Boolean(settings.cache.enable_auto_clean),

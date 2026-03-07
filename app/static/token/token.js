@@ -68,7 +68,7 @@ async function parseJsonSafely(response) {
 }
 
 const NSFW_REFRESH_WORKERS_KEY = 'nsfw_refresh_workers';
-const NSFW_REFRESH_DEFAULT_WORKERS = 12;
+const NSFW_REFRESH_DEFAULT_WORKERS = 10;
 const NSFW_REFRESH_MIN_WORKERS = 1;
 const NSFW_REFRESH_MAX_WORKERS = 20;
 
