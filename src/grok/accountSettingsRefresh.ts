@@ -28,6 +28,8 @@ export interface AccountSettingsApplyResult {
   error?: string;
 }
 
+export type AccountSettingsStep = "tos" | "birth" | "nsfw";
+
 function extractCookieValue(cookieString: string, name: string): string | null {
   const needle = `${name}=`;
   if (!cookieString.includes(needle)) return null;
@@ -141,6 +143,7 @@ async function setBirthDate(args: {
 export async function applyAccountSettingsForToken(args: {
   rawToken: string;
   settings: GrokSettings;
+  steps?: AccountSettingsStep[];
 }): Promise<AccountSettingsApplyResult> {
   const { sso, ssoRw } = parseSsoPair(args.rawToken);
   if (!sso) return { ok: false, step: "parse", error: "missing sso" };
@@ -148,27 +151,39 @@ export async function applyAccountSettingsForToken(args: {
   const cfClearance = String(args.settings.cf_clearance || "").trim();
   const cookie = buildCookieHeader({ sso, ssoRw: ssoRw || sso, cfClearance });
 
-  const tos = await postGrpc({
-    url: "https://accounts.x.ai/auth_mgmt.AuthManagement/SetTosAcceptedVersion",
-    origin: "https://accounts.x.ai",
-    referer: "https://accounts.x.ai/accept-tos",
-    cookie,
-    body: TOS_PROTO,
-  });
-  if (!tos.ok) return { ok: false, step: "tos", error: tos.error };
+  const requestedSteps = Array.isArray(args.steps) && args.steps.length
+    ? args.steps
+    : (["tos", "birth", "nsfw"] as AccountSettingsStep[]);
 
-  const birth = await setBirthDate({ cookie });
-  if (!birth.ok) return { ok: false, step: "birth", error: birth.error };
+  for (const step of requestedSteps) {
+    if (step === "tos") {
+      const tos = await postGrpc({
+        url: "https://accounts.x.ai/auth_mgmt.AuthManagement/SetTosAcceptedVersion",
+        origin: "https://accounts.x.ai",
+        referer: "https://accounts.x.ai/accept-tos",
+        cookie,
+        body: TOS_PROTO,
+      });
+      if (!tos.ok) return { ok: false, step: "tos", error: tos.error };
+      continue;
+    }
 
-  const nsfw = await postGrpc({
-    url: "https://grok.com/auth_mgmt.AuthManagement/UpdateUserFeatureControls",
-    origin: "https://grok.com",
-    referer: "https://grok.com/?_s=data",
-    cookie,
-    body: NSFW_PROTO,
-  });
-  if (!nsfw.ok) return { ok: false, step: "nsfw", error: nsfw.error };
+    if (step === "birth") {
+      const birth = await setBirthDate({ cookie });
+      if (!birth.ok) return { ok: false, step: "birth", error: birth.error };
+      continue;
+    }
 
-  return { ok: true, step: "nsfw" };
+    const nsfw = await postGrpc({
+      url: "https://grok.com/auth_mgmt.AuthManagement/UpdateUserFeatureControls",
+      origin: "https://grok.com",
+      referer: "https://grok.com/?_s=data",
+      cookie,
+      body: NSFW_PROTO,
+    });
+    if (!nsfw.ok) return { ok: false, step: "nsfw", error: nsfw.error };
+  }
+
+  return { ok: true, step: requestedSteps[requestedSteps.length - 1] || "nsfw" };
 }
 

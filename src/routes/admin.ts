@@ -36,7 +36,7 @@ import {
 } from "../repo/tokens";
 import { generateImagineWs, resolveAspectRatio } from "../grok/imagineExperimental";
 import { checkRateLimits } from "../grok/rateLimits";
-import { applyAccountSettingsForToken, normalizeRefreshToken } from "../grok/accountSettingsRefresh";
+import { applyAccountSettingsForToken, normalizeRefreshToken, type AccountSettingsStep } from "../grok/accountSettingsRefresh";
 import { addRequestLog, clearRequestLogs, getRequestLogs, getRequestStats } from "../repo/logs";
 import { getRefreshProgress, setRefreshProgress } from "../repo/refreshProgress";
 import {
@@ -79,6 +79,19 @@ function normalizeSsoToken(raw: string): string {
 
 const DEFAULT_NSFW_REFRESH_CONCURRENCY = 1;
 const DEFAULT_NSFW_REFRESH_RETRIES = 0;
+const DEFAULT_NSFW_REFRESH_STEPS: AccountSettingsStep[] = ["tos", "birth", "nsfw"];
+
+function parseNsfwSteps(value: unknown): AccountSettingsStep[] {
+  const source = Array.isArray(value) ? value : [value];
+  const out: AccountSettingsStep[] = [];
+  for (const item of source) {
+    const step = String(item ?? "").trim().toLowerCase();
+    if (step !== "tos" && step !== "birth" && step !== "nsfw") continue;
+    const typed = step as AccountSettingsStep;
+    if (!out.includes(typed)) out.push(typed);
+  }
+  return out.length ? out : [...DEFAULT_NSFW_REFRESH_STEPS];
+}
 
 function toIntInRange(value: unknown, fallback: number, min: number, max: number): number {
   const n = Number(value);
@@ -821,20 +834,24 @@ adminRoutes.post("/api/v1/admin/tokens/nsfw/refresh", requireAdminAuth, async (c
 
     if (!deduped.length) return c.json(legacyErr("No tokens provided"), 400);
 
+    const steps = parseNsfwSteps(body?.steps ?? body?.step);
     const concurrency = toIntInRange(
       body?.concurrency,
       DEFAULT_NSFW_REFRESH_CONCURRENCY,
       1,
       1,
     );
-    const retries = toIntInRange(body?.retries, DEFAULT_NSFW_REFRESH_RETRIES, 0, 1);
+    const retries = toIntInRange(body?.retries, DEFAULT_NSFW_REFRESH_RETRIES, 0, 0);
 
     // Keep each invocation very small to avoid Cloudflare subrequest quota hits.
     const maxTokensPerInvocation = 1;
     const targets = deduped.slice(0, maxTokensPerInvocation);
     const remaining = Math.max(0, deduped.length - targets.length);
 
-    const settings = await getSettings(c.env);
+    const persistStatus = body?.persist_status === true;
+    const cfClearance = typeof body?.cf_clearance === "string" ? body.cf_clearance : "";
+    const minimalSettings = { cf_clearance: cfClearance } as any;
+
     const failed: Array<Record<string, unknown>> = [];
     let success = 0;
     let invalidated = 0;
@@ -847,36 +864,47 @@ adminRoutes.post("/api/v1/admin/tokens/nsfw/refresh", requireAdminAuth, async (c
 
       for (let i = 0; i < maxAttempts; i++) {
         attempts = i + 1;
-        const result = await applyAccountSettingsForToken({
-          rawToken: item.raw,
-          settings: settings.grok,
-        });
-        if (result.ok) {
-          success += 1;
-          await dbRun(
-            c.env.DB,
-            "UPDATE tokens SET status = 'active', failed_count = 0, cooldown_until = NULL, last_failure_time = NULL, last_failure_reason = NULL WHERE token = ?",
-            [item.normalized],
-          );
-          return;
+        try {
+          const result = await applyAccountSettingsForToken({
+            rawToken: item.raw,
+            settings: minimalSettings,
+            steps,
+          });
+          if (result.ok) {
+            success += 1;
+            if (persistStatus) {
+              await dbRun(
+                c.env.DB,
+                "UPDATE tokens SET status = 'active', failed_count = 0, cooldown_until = NULL, last_failure_time = NULL, last_failure_reason = NULL WHERE token = ?",
+                [item.normalized],
+              );
+            }
+            return;
+          }
+          lastStep = result.step;
+          lastError = String(result.error || "unknown error");
+        } catch (err) {
+          lastStep = String(steps[steps.length - 1] || "unknown");
+          lastError = err instanceof Error ? err.message : String(err);
         }
-        lastStep = result.step;
-        lastError = String(result.error || "unknown error");
       }
 
-      invalidated += 1;
-      const reason = `account_settings_refresh_failed step=${lastStep} attempts=${attempts} error=${lastError}`.slice(0, 500);
-      await dbRun(
-        c.env.DB,
-        "UPDATE tokens SET status = 'expired', failed_count = 3, cooldown_until = NULL, last_failure_time = ?, last_failure_reason = ? WHERE token = ?",
-        [nowMs(), reason, item.normalized],
-      );
+      if (persistStatus) {
+        invalidated += 1;
+        const reason = `account_settings_refresh_failed step=${lastStep} attempts=${attempts} error=${lastError}`.slice(0, 500);
+        await dbRun(
+          c.env.DB,
+          "UPDATE tokens SET status = 'expired', failed_count = 3, cooldown_until = NULL, last_failure_time = ?, last_failure_reason = ? WHERE token = ?",
+          [nowMs(), reason, item.normalized],
+        );
+      }
+
       failed.push({
         token: `sso=${item.normalized}`,
         step: lastStep,
         attempts,
         error: lastError,
-        invalidated: true,
+        invalidated: persistStatus,
       });
     });
 
@@ -888,6 +916,10 @@ adminRoutes.post("/api/v1/admin/tokens/nsfw/refresh", requireAdminAuth, async (c
           failed: failed.length,
           invalidated,
         },
+        mode: {
+          steps,
+          persist_status: persistStatus,
+        },
         failed,
         has_more: remaining > 0,
         remaining,
@@ -897,7 +929,6 @@ adminRoutes.post("/api/v1/admin/tokens/nsfw/refresh", requireAdminAuth, async (c
     return c.json(legacyErr(`NSFW refresh failed: ${e instanceof Error ? e.message : String(e)}`), 500);
   }
 });
-
 adminRoutes.get("/api/v1/admin/cache/local", requireAdminAuth, async (c) => {
   try {
     const stats = await getKvStats(c.env.DB);

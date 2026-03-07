@@ -1155,7 +1155,7 @@ async function refreshAllNsfw() {
   }
 
   const ok = await confirmAction(
-    "将对全部 Token 执行：同意用户协议 + 设置年龄 + 开启 NSFW。未成功的 Token 会自动标记为失效，是否继续？",
+    "将对全部 Token 执行：同意用户协议 + 设置年龄 + 开启 NSFW。是否继续？",
     { okText: "开始刷新" }
   );
   if (!ok) return;
@@ -1168,9 +1168,9 @@ async function refreshAllNsfw() {
     btn.innerHTML = "刷新中...";
   }
 
-  const CHUNK_SIZE = 1;
-  const RETRIES = 0;
-  const CONCURRENCY = 1;
+  const TOKEN_DELAY_MS = 120;
+  const STEP_DELAY_MS = 80;
+  const STEP_ORDER = ["tos", "birth", "nsfw"];
 
   try {
     const listRes = await fetch("/api/v1/admin/tokens", {
@@ -1197,53 +1197,73 @@ async function refreshAllNsfw() {
       return;
     }
 
-    const totalChunks = Math.ceil(deduped.length / CHUNK_SIZE);
     let total = 0;
     let success = 0;
     let failed = 0;
-    let invalidated = 0;
 
-    for (let i = 0; i < deduped.length; i += CHUNK_SIZE) {
-      const chunkIndex = Math.floor(i / CHUNK_SIZE) + 1;
-      const chunk = deduped.slice(i, i + CHUNK_SIZE);
-      if (btn) btn.innerHTML = `刷新中... (${chunkIndex}/${totalChunks})`;
+    for (let i = 0; i < deduped.length; i += 1) {
+      const token = deduped[i];
+      const tokenIndex = i + 1;
+      if (btn) btn.innerHTML = `刷新中... (${tokenIndex}/${deduped.length})`;
 
-      const res = await fetch("/api/v1/admin/tokens/nsfw/refresh", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...buildAuthHeaders(apiKey),
-        },
-        body: JSON.stringify({
-          tokens: chunk,
-          retries: RETRIES,
-          concurrency: CONCURRENCY,
-        }),
-      });
+      let tokenOk = true;
+      let tokenErr = "";
 
-      const payload = await parseJsonSafely(res);
-      if (!res.ok) {
-        const msg = extractApiErrorMessage(payload, "NSFW 分片刷新失败");
-        showToast(`第 ${chunkIndex}/${totalChunks} 片失败：${msg}`, "error");
-        total += chunk.length;
-        failed += chunk.length;
-        invalidated += chunk.length;
-        continue;
+      for (let s = 0; s < STEP_ORDER.length; s += 1) {
+        const step = STEP_ORDER[s];
+        const res = await fetch("/api/v1/admin/tokens/nsfw/refresh", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...buildAuthHeaders(apiKey),
+          },
+          body: JSON.stringify({
+            token,
+            step,
+            retries: 0,
+            concurrency: 1,
+            persist_status: false,
+          }),
+        });
+
+        const payload = await parseJsonSafely(res);
+        if (!res.ok) {
+          tokenOk = false;
+          tokenErr = extractApiErrorMessage(payload, `步骤 ${step} 失败`);
+          break;
+        }
+
+        const summary = payload?.summary || {};
+        if (Number(summary.success || 0) < 1) {
+          const firstFail = Array.isArray(payload?.failed) ? payload.failed[0] : null;
+          tokenOk = false;
+          tokenErr = firstFail?.error || firstFail?.step || `步骤 ${step} 失败`;
+          break;
+        }
+
+        if (s + 1 < STEP_ORDER.length) {
+          await new Promise((resolve) => setTimeout(resolve, STEP_DELAY_MS));
+        }
       }
 
-      const summary = payload?.summary || {};
-      total += Number(summary.total || chunk.length);
-      success += Number(summary.success || 0);
-      failed += Number(summary.failed || 0);
-      invalidated += Number(summary.invalidated || 0);
+      total += 1;
+      if (tokenOk) {
+        success += 1;
+      } else {
+        failed += 1;
+      }
 
-      if (i + CHUNK_SIZE < deduped.length) {
-        await new Promise((resolve) => setTimeout(resolve, 120));
+      if (!tokenOk) {
+        showToast(`第 ${tokenIndex}/${deduped.length} 个 Token 失败：${tokenErr}`, "error");
+      }
+
+      if (tokenIndex < deduped.length) {
+        await new Promise((resolve) => setTimeout(resolve, TOKEN_DELAY_MS));
       }
     }
 
     showToast(
-      `NSFW 刷新完成：总计 ${total}，成功 ${success}，失败 ${failed}，失效 ${invalidated}`,
+      `NSFW 刷新完成：总计 ${total}，成功 ${success}，失败 ${failed}`,
       failed > 0 ? "info" : "success"
     );
     loadData();
